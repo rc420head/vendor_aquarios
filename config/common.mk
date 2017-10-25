@@ -1,5 +1,5 @@
-PRODUCT_BRAND ?= CarbonROM
-CARBON_BUILD := true
+PRODUCT_BRAND ?= AquariOS
+AQUARIOS_BUILD := true
 
 ifneq ($(TARGET_SCREEN_WIDTH) $(TARGET_SCREEN_HEIGHT),$(space))
 # determine the smaller dimension
@@ -11,7 +11,7 @@ TARGET_BOOTANIMATION_SIZE := $(shell \
   fi )
 
 # get a sorted list of the sizes
-bootanimation_sizes := $(subst .zip,, $(shell ls vendor/carbon/prebuilt/bootanimation))
+bootanimation_sizes := $(subst .zip,, $(shell ls vendor/aquarios/prebuilt/bootanimation))
 bootanimation_sizes := $(shell echo -e $(subst $(space),'\n',$(bootanimation_sizes)) | sort -rn)
 
 # find the appropriate size and set
@@ -28,7 +28,7 @@ endef
 $(foreach size,$(bootanimation_sizes), $(call check_and_set_bootanimation,$(size)))
 
 PRODUCT_COPY_FILES += \
-    vendor/carbon/prebuilt/bootanimation/$(TARGET_BOOTANIMATION_NAME).zip:system/media/bootanimation.zip
+    vendor/aquarios/prebuilt/bootanimation/$(TARGET_BOOTANIMATION_NAME).zip:system/media/bootanimation.zip
 endif
 
 ifeq ($(PRODUCT_GMS_CLIENTID_BASE),)
@@ -56,39 +56,39 @@ PRODUCT_PROPERTY_OVERRIDES += \
 
 # Backup Tool
 PRODUCT_COPY_FILES += \
-    vendor/carbon/prebuilt/bin/backuptool.sh:install/bin/backuptool.sh \
-    vendor/carbon/prebuilt/bin/backuptool.functions:install/bin/backuptool.functions \
-    vendor/carbon/prebuilt/bin/50-hosts.sh:system/addon.d/50-hosts.sh \
-    vendor/carbon/prebuilt/bin/blacklist:system/addon.d/blacklist
+    vendor/aquarios/prebuilt/bin/backuptool.sh:install/bin/backuptool.sh \
+    vendor/aquarios/prebuilt/bin/backuptool.functions:install/bin/backuptool.functions \
+    vendor/aquarios/prebuilt/bin/50-hosts.sh:system/addon.d/50-hosts.sh \
+    vendor/aquarios/prebuilt/bin/blacklist:system/addon.d/blacklist
 
 # init.d support
 PRODUCT_COPY_FILES += \
-    vendor/carbon/prebuilt/etc/init.d/00banner:system/etc/init.d/00banner \
-    vendor/carbon/prebuilt/bin/sysinit:system/bin/sysinit \
-    vendor/carbon/prebuilt/etc/init.carbon.rc:root/init.carbon.rc
+    vendor/aquarios/prebuilt/etc/init.d/00banner:system/etc/init.d/00banner \
+    vendor/aquarios/prebuilt/bin/sysinit:system/bin/sysinit \
+    vendor/aquarios/prebuilt/etc/init.aquarios.rc:root/init.aquarios.rc
 
 # Enable SIP and VoIP on all targets
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.software.sip.voip.xml:system/etc/permissions/android.software.sip.voip.xml
 
 # Additional packages
--include vendor/carbon/config/packages.mk
+-include vendor/aquarios/config/packages.mk
 
 # Versioning
--include vendor/carbon/config/version.mk
+-include vendor/aquarios/config/version.mk
 
 # SELinux Policy
--include vendor/carbon/sepolicy/sepolicy.mk
+-include vendor/aquarios/sepolicy/sepolicy.mk
 
 # Add our overlays
-PRODUCT_PACKAGE_OVERLAYS += vendor/carbon/overlay/common
+PRODUCT_PACKAGE_OVERLAYS += vendor/aquarios/overlay/common
 
 # Squisher Location
-SQUISHER_SCRIPT := vendor/carbon/tools/squisher
+SQUISHER_SCRIPT := vendor/aquarios/tools/squisher
 
 # Include SDCLANG definitions if it is requested and available
 ifeq ($(HOST_OS),linux)
     ifneq ($(wildcard vendor/qcom/sdclang-4.0/),)
-        include vendor/carbon/sdclang/sdclang.mk
+        include vendor/aquarios/sdclang/sdclang.mk
     endif
 endif
