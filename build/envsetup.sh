@@ -1,11 +1,11 @@
-# gzosp functions that extend build/envsetup.sh
+# aquarios functions that extend build/envsetup.sh
 
-function gzosp_device_combos()
+function aquarios_device_combos()
 {
     local T list_file variant device
 
     T="$(gettop)"
-    list_file="${T}/vendor/gzosp/gzosp.devices"
+    list_file="${T}/vendor/aquarios/aquarios.devices"
     variant="userdebug"
 
     if [[ $1 ]]
@@ -27,45 +27,45 @@ function gzosp_device_combos()
     if [[ ! -f "${list_file}" ]]
     then
         echo "unable to find device list: ${list_file}"
-        list_file="${T}/vendor/gzosp/gzosp.devices"
+        list_file="${T}/vendor/aquarios/aquarios.devices"
         echo "defaulting device list file to: ${list_file}"
     fi
 
     while IFS= read -r device
     do
-        add_lunch_combo "gzosp_${device}-${variant}"
+        add_lunch_combo "aquarios_${device}-${variant}"
     done < "${list_file}"
 }
 
-function gzosp_rename_function()
+function aquarios_rename_function()
 {
-    eval "original_gzosp_$(declare -f ${1})"
+    eval "original_aquarios_$(declare -f ${1})"
 }
 
-function _gzosp_build_hmm() #hidden
+function _aquarios_build_hmm() #hidden
 {
     printf "%-8s %s" "${1}:" "${2}"
 }
 
-function gzosp_append_hmm()
+function aquarios_append_hmm()
 {
-    HMM_DESCRIPTIVE=("${HMM_DESCRIPTIVE[@]}" "$(_gzosp_build_hmm "$1" "$2")")
+    HMM_DESCRIPTIVE=("${HMM_DESCRIPTIVE[@]}" "$(_aquarios_build_hmm "$1" "$2")")
 }
 
-function gzosp_add_hmm_entry()
+function aquarios_add_hmm_entry()
 {
     for c in ${!HMM_DESCRIPTIVE[*]}
     do
         if [[ "${1}" == $(echo "${HMM_DESCRIPTIVE[$c]}" | cut -f1 -d":") ]]
         then
-            HMM_DESCRIPTIVE[${c}]="$(_gzosp_build_hmm "$1" "$2")"
+            HMM_DESCRIPTIVE[${c}]="$(_aquarios_build_hmm "$1" "$2")"
             return
         fi
     done
-    gzosp_append_hmm "$1" "$2"
+    aquarios_append_hmm "$1" "$2"
 }
 
-function gzospremote()
+function aquariosremote()
 {
     local proj pfx project
 
@@ -74,7 +74,7 @@ function gzospremote()
         echo "Not in a git directory. Please run this from an Android repository you wish to set up."
         return
     fi
-    git remote rm gzosp 2> /dev/null
+    git remote rm aquarios 2> /dev/null
 
     proj="$(pwd -P | sed "s#$ANDROID_BUILD_TOP/##g")"
 
@@ -84,8 +84,8 @@ function gzospremote()
 
     project="${proj//\//_}"
 
-    git remote add gzosp "git@github.com:GZOSP/$pfx$project"
-    echo "Remote 'gzosp' created"
+    git remote add aquarios "git@github.com:AQUARIOS/$pfx$project"
+    echo "Remote 'aquarios' created"
 }
 
 function cmremote()
@@ -145,11 +145,11 @@ function cafremote()
     echo "Remote 'caf' created"
 }
 
-function gzosp_push()
+function aquarios_push()
 {
     local branch ssh_name path_opt proj
     branch="lp5.1"
-    ssh_name="gzosp_review"
+    ssh_name="aquarios_review"
     path_opt=
 
     if [[ "$1" ]]
@@ -167,13 +167,13 @@ function gzosp_push()
         proj="android_$proj"
     fi
 
-    git $path_opt push "ssh://${ssh_name}/GZOSP/$proj" "HEAD:refs/for/$branch"
+    git $path_opt push "ssh://${ssh_name}/AQUARIOS/$proj" "HEAD:refs/for/$branch"
 }
 
 function eat()
 {
     if [ "$OUT" ] ; then
-        ZIPPATH=`ls -tr "$OUT"/Gzosp-*.zip | tail -1`
+        ZIPPATH=`ls -tr "$OUT"/AquariOS-*.zip | tail -1`
         if [ ! -f $ZIPPATH ] ; then
             echo "Nothing to eat"
             return 1
@@ -187,7 +187,7 @@ function eat()
             done
             echo "Device Found.."
         fi
-        if (adb shell getprop ro.gzosp.device | grep -q "$GZOSP_BUILD"); then
+        if (adb shell getprop ro.aquarios.device | grep -q "$AQUARIOS_BUILD"); then
             # if adbd isn't root we can't write to /cache/recovery/
             adb root
             sleep 1
@@ -203,7 +203,7 @@ EOF
             fi
             rm /tmp/command
         else
-            echo "The connected device does not appear to be $GZOSP_BUILD, run away!"
+            echo "The connected device does not appear to be $AQUARIOS_BUILD, run away!"
         fi
         return $?
     else
@@ -213,20 +213,20 @@ EOF
 }
 
 
-gzosp_rename_function hmm
+aquarios_rename_function hmm
 function hmm() #hidden
 {
     local i T
     T="$(gettop)"
-    original_gzosp_hmm
+    original_aquarios_hmm
     echo
 
-    echo "vendor/gzosp extended functions. The complete list is:"
-    for i in $(grep -P '^function .*$' "$T/vendor/gzosp/build/envsetup.sh" | grep -v "#hidden" | sed 's/function \([a-z_]*\).*/\1/' | sort | uniq); do
+    echo "vendor/aquarios extended functions. The complete list is:"
+    for i in $(grep -P '^function .*$' "$T/vendor/aquarios/build/envsetup.sh" | grep -v "#hidden" | sed 's/function \([a-z_]*\).*/\1/' | sort | uniq); do
         echo "$i"
     done |column
 }
 
-gzosp_append_hmm "gzospremote" "Add a git remote for matching gzosp repository"
-gzosp_append_hmm "aospremote" "Add git remote for matching AOSP repository"
-gzosp_append_hmm "cafremote" "Add git remote for matching CodeAurora repository."
+aquarios_append_hmm "aquariosremote" "Add a git remote for matching aquarios repository"
+aquarios_append_hmm "aospremote" "Add git remote for matching AOSP repository"
+aquarios_append_hmm "cafremote" "Add git remote for matching CodeAurora repository."

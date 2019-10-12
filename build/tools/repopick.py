@@ -28,19 +28,23 @@ import subprocess
 import re
 import argparse
 import textwrap
+from functools import cmp_to_key
 from xml.etree import ElementTree
 
 try:
-    # For python3
-    import urllib.error
-    import urllib.request
+    import requests
 except ImportError:
-    # For python2
-    import imp
-    import urllib2
-    urllib = imp.new_module('urllib')
-    urllib.error = urllib2
-    urllib.request = urllib2
+    try:
+        # For python3
+        import urllib.error
+        import urllib.request
+    except ImportError:
+        # For python2
+        import imp
+        import urllib2
+        urllib = imp.new_module('urllib')
+        urllib.error = urllib2
+        urllib.request = urllib2
 
 
 # Verifies whether pathA is a subdirectory (or the same) as pathB
@@ -99,11 +103,29 @@ def fetch_query_via_ssh(remote_url, query):
 
 
 def fetch_query_via_http(remote_url, query):
-
-    """Given a query, fetch the change numbers via http"""
-    url = '{0}/changes/?q={1}&o=CURRENT_REVISION&o=ALL_REVISIONS'.format(remote_url, query)
-    data = urllib.request.urlopen(url).read().decode('utf-8')
-    reviews = json.loads(data[5:])
+    if "requests" in sys.modules:
+        auth = None
+        if os.path.isfile(os.getenv("HOME") + "/.gerritrc"):
+            f = open(os.getenv("HOME") + "/.gerritrc", "r")
+            for line in f:
+                parts = line.rstrip().split("|")
+                if parts[0] in remote_url:
+                    auth = requests.auth.HTTPBasicAuth(username=parts[1], password=parts[2])
+        statusCode = '-1'
+        if auth:
+            url = '{0}/a/changes/?q={1}&o=CURRENT_REVISION&o=ALL_REVISIONS&o=ALL_COMMITS'.format(remote_url, query)
+            data = requests.get(url, auth=auth)
+            statusCode = str(data.status_code)
+        if statusCode != '200':
+            #They didn't get good authorization or data, Let's try the old way
+            url = '{0}/changes/?q={1}&o=CURRENT_REVISION&o=ALL_REVISIONS&o=ALL_COMMITS'.format(remote_url, query)
+            data = requests.get(url)
+        reviews = json.loads(data.text[5:])
+    else:
+        """Given a query, fetch the change numbers via http"""
+        url = '{0}/changes/?q={1}&o=CURRENT_REVISION&o=ALL_REVISIONS&o=ALL_COMMITS'.format(remote_url, query)
+        data = urllib.request.urlopen(url).read().decode('utf-8')
+        reviews = json.loads(data[5:])
 
     for review in reviews:
         review['number'] = review.pop('_number')
@@ -121,12 +143,12 @@ def fetch_query(remote_url, query):
         raise Exception('Gerrit URL should be in the form http[s]://hostname/ or ssh://[user@]host[:port]')
 
 if __name__ == '__main__':
-    # Default to GZOSP Gerrit
-    default_gerrit = 'https://review.gzospgzr.com'
+    # Default to Gerrit
+    default_gerrit = 'https://review.aquarios.net'
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, description=textwrap.dedent('''\
         repopick.py is a utility to simplify the process of cherry picking
-        patches from CyanogenMod's Gerrit instance (or any gerrit instance of your choosing)
+        patches from Gerrit instance (or any gerrit instance of your choosing)
 
         Given a list of change numbers, repopick will cd into the project path
         and cherry pick the latest patch available.
@@ -149,7 +171,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--force', action='store_true', help='force cherry pick even if change is closed')
     parser.add_argument('-p', '--pull', action='store_true', help='execute pull instead of cherry-pick')
     parser.add_argument('-P', '--path', help='use the specified path for the change')
-    parser.add_argument('-t', '--topic', help='pick all commits from a specified topic')
+    parser.add_argument('-t', '--topic', nargs='*', help='pick all commits from the specified topics')
     parser.add_argument('-Q', '--query', help='pick all commits using the specified query')
     parser.add_argument('-g', '--gerrit', default=default_gerrit, help='Gerrit Instance to use. Form proto://[user@]host[:port]')
     parser.add_argument('-e', '--exclude', nargs=1, help='exclude a list of commit numbers separated by a ,')
@@ -216,10 +238,8 @@ if __name__ == '__main__':
     #{project: {path, revision}}
 
     for project in projects:
-        name = project.get('name')
+        name = project.get('name').replace("DirtyUnicorns/", "")
         path = project.get('path')
-        if path is None:
-            path=name
         revision = project.get('revision')
         if revision is None:
             for remote in remotes:
@@ -236,12 +256,30 @@ if __name__ == '__main__':
     # get data on requested changes
     reviews = []
     change_numbers = []
+
+    def cmp_reviews(review_a, review_b):
+        current_a = review_a['current_revision']
+        parents_a = [r['commit'] for r in review_a['revisions'][current_a]['commit']['parents']]
+        current_b = review_b['current_revision']
+        parents_b = [r['commit'] for r in review_b['revisions'][current_b]['commit']['parents']]
+        if current_a in parents_b:
+            return -1
+        elif current_b in parents_a:
+            return 1
+        else:
+            return cmp(review_a['number'], review_b['number'])
+
     if args.topic:
-        reviews = fetch_query(args.gerrit, 'topic:{0}'.format(args.topic))
-        change_numbers = sorted([str(r['number']) for r in reviews])
+        for t in args.topic:
+            # Store current topic to process for change_numbers
+            topic = fetch_query(args.gerrit, 'status:open+topic:{0}'.format(t))
+            # Append topic to reviews, for later reference
+            reviews += topic
+            # Cycle through the current topic to get the change numbers
+            change_numbers = [str(r['number']) for r in sorted(reviews, key=cmp_to_key(cmp_reviews))]
     if args.query:
         reviews = fetch_query(args.gerrit, args.query)
-        change_numbers = sorted([str(r['number']) for r in reviews])
+        change_numbers = [str(r['number']) for r in sorted(reviews, key=cmp_to_key(cmp_reviews))]
     if args.change_number:
         for c in args.change_number:
             if '-' in c:
@@ -250,10 +288,7 @@ if __name__ == '__main__':
                     change_numbers.append(str(i))
             else:
                 change_numbers.append(c)
-        try:
-            reviews = fetch_query(args.gerrit, ' OR '.join('change:{0}'.format(x.split('/')[0]) for x in change_numbers))
-        except urllib2.HTTPError:
-            reviews = fetch_query(args.gerrit[0:-1], ' OR '.join('change:{0}'.format(x.split('/')[0]) for x in change_numbers))
+        reviews = fetch_query(args.gerrit, ' OR '.join('change:{0}'.format(x.split('/')[0]) for x in change_numbers))
 
     # make list of things to actually merge
     mergables = []
@@ -279,7 +314,7 @@ if __name__ == '__main__':
 
         mergables.append({
             'subject': review['subject'],
-            'project': review['project'].split('/')[1],
+            'project': review['project'],
             'branch': review['branch'],
             'change_id': review['change_id'],
             'change_number': review['number'],
@@ -298,7 +333,7 @@ if __name__ == '__main__':
     for item in mergables:
         args.quiet or print('Applying change number {0}...'.format(item['id']))
         # Check if change is open and exit if it's not, unless -f is specified
-        if (item['status'] != 'OPEN' and item['status'] != 'NEW') and not args.query:
+        if (item['status'] != 'OPEN' and item['status'] != 'NEW' and item['status'] != 'DRAFT') and not args.query:
             if args.force:
                 print('!! Force-picking a closed change !!\n')
             else:
@@ -333,6 +368,8 @@ if __name__ == '__main__':
         # Check if change is already picked to HEAD...HEAD~check_picked_count
         found_change = False
         for i in range(0, check_picked_count):
+            if subprocess.call(['git', 'cat-file', '-e', 'HEAD~{0}'.format(i)], cwd=project_path, stderr=open(os.devnull, 'wb')):
+                continue
             output = subprocess.check_output(['git', 'show', '-q', 'HEAD~{0}'.format(i)], cwd=project_path).split()
             if 'Change-Id:' in output:
                 head_change_id = ''
@@ -349,7 +386,7 @@ if __name__ == '__main__':
 
         # Print out some useful info
         if not args.quiet:
-            print('--> Subject:       "{0}"'.format(item['subject'].encode('utf-8')))
+            print('--> Subject:       "{0}"'.format(item['subject']))
             print('--> Project path:  {0}'.format(project_path))
             print('--> Change number: {0} (Patch Set {0})'.format(item['id']))
 
@@ -364,11 +401,13 @@ if __name__ == '__main__':
                 print('Trying to fetch the change from GitHub')
 
             if args.pull:
-                cmd = ['git pull --no-edit gzosp', item['fetch'][method]['ref']]
+                cmd = ['git pull --no-edit github', item['fetch'][method]['ref']]
             else:
-                cmd = ['git fetch gzosp', item['fetch'][method]['ref']]
+                cmd = ['git fetch github', item['fetch'][method]['ref']]
             if args.quiet:
                 cmd.append('--quiet')
+            else:
+                print(cmd)
             result = subprocess.call([' '.join(cmd)], cwd=project_path, shell=True)
             FETCH_HEAD = '{0}/.git/FETCH_HEAD'.format(project_path)
             if result != 0 and os.stat(FETCH_HEAD).st_size != 0:
@@ -376,7 +415,7 @@ if __name__ == '__main__':
                 sys.exit(result)
         # Check if it worked
         if args.gerrit != default_gerrit or os.stat(FETCH_HEAD).st_size == 0:
-            # If not using the default gerrit or gzosp failed, fetch from gerrit.
+            # If not using the default gerrit or github failed, fetch from gerrit.
             if args.verbose:
                 if args.gerrit == default_gerrit:
                     print('Fetching from GitHub didn\'t work, trying to fetch the change from Gerrit')
@@ -389,11 +428,12 @@ if __name__ == '__main__':
                 cmd = ['git fetch', item['fetch'][method]['url'], item['fetch'][method]['ref']]
             if args.quiet:
                 cmd.append('--quiet')
+            else:
+                print(cmd)
             result = subprocess.call([' '.join(cmd)], cwd=project_path, shell=True)
             if result != 0:
                 print('ERROR: git command failed')
                 sys.exit(result)
-
         # Perform the cherry-pick
         if not args.pull:
             cmd = ['git cherry-pick FETCH_HEAD']

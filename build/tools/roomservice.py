@@ -1,86 +1,101 @@
 #!/usr/bin/env python
-# Copyright (C) 2012-2013, The CyanogenMod Project
-# Copyright (C) 2012-2015, SlimRoms Project
-# Copyright (C) 2017, GZOSP
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
-from __future__ import print_function
+# Copyright (C) 2013 Cybojenix <anthonydking@gmail.com>
+# Copyright (C) 2013 The OmniROM Project
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import base64
-import json
-import netrc
+
 import os
+import os.path
 import sys
-
+import urllib2
+import json
+import re
+import subprocess
 from xml.etree import ElementTree
+from urllib2 import urlopen, Request
+
+product = sys.argv[1];
+
+if len(sys.argv) > 2:
+    depsonly = sys.argv[2]
+else:
+    depsonly = None
 
 try:
-    # For python3
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-except ImportError:
-    # For python2
-    import imp
-    import urllib2
-    import urlparse
-    urllib = imp.new_module('urllib')
-    urllib.error = urllib2
-    urllib.parse = urlparse
-    urllib.request = urllib2
+    device = product[product.index("_") + 1:]
+except:
+    device = product
 
-DEBUG = False
-default_manifest = ".repo/manifests/gzosp_default.xml"
-custom_local_manifest = ".repo/local_manifests/gzosp_manifest.xml"
-custom_default_revision = "8.1"
-custom_dependencies = "gzosp.dependencies"
-org_manifest = "GZOSP-Devices"  # leave empty if org is provided in manifest
-org_display = "GZOSP-Devices"  # needed for displaying
+if not depsonly:
+    print "Device %s not found. Attempting to retrieve device repository from AquariOS Devices Github (http://github.com/Aqua-devices)." % device
 
-github_auth = None
+repositories = []
 
+# repo check
+branch_check = r'external/bson'
+if os.path.exists(branch_check):
+    aqua_branch = "x-ng";
+else:
+    aqua_branch = "x";
 
-local_manifests = '.repo/local_manifests'
-if not os.path.exists(local_manifests):
-    os.makedirs(local_manifests)
+# gapps
+repo_check = r'vendor/pixelgapps'
+gapps_location = 'vendor/pixelgapps'
+gapps_git = 'https://gitlab.com/AquariOS/vendor_pixelgapps'
+gapps_branch = 'x'
 
+# vendor_images
+repo_check = r'vendor/images'
+images_location = 'vendor/images'
+images_git = 'https://gitlab.com/DirtyUnicorns/android_vendor_images'
+images_branch = 'q10x'
 
-def debug(*args, **kwargs):
-    if DEBUG:
-        print(*args, **kwargs)
+page = 1
+while not depsonly:
+    request = Request("https://api.github.com/users/Aqua-devices/repos?page=%d" % page)
+    api_file = os.getenv("HOME") + '/api_token'
+    if (os.path.isfile(api_file)):
+        infile = open(api_file, 'r')
+        token = infile.readline()
+        request.add_header('Authorization', 'token %s' % token.strip())
+    result = json.loads(urllib2.urlopen(request).read())
+    if len(result) == 0:
+        break
+    for res in result:
+        repositories.append(res)
+    page = page + 1
 
+local_manifests = r'.repo/local_manifests'
+if not os.path.exists(local_manifests): os.makedirs(local_manifests)
 
-def add_auth(g_req):
-    global github_auth
-    if github_auth is None:
-        try:
-            auth = netrc.netrc().authenticators("api.github.com")
-        except (netrc.NetrcParseError, IOError):
-            auth = None
-        if auth:
-            github_auth = base64.b64encode(
-                ('%s:%s' % (auth[0], auth[2])).encode()
-            )
-        else:
-            github_auth = ""
-    if github_auth:
-        g_req.add_header("Authorization", "Basic %s" % github_auth)
+def exists_in_tree(lm, repository):
+    for child in lm.getchildren():
+        if child.attrib['path'].endswith(repository):
+            return child
+    return None
 
+def exists_in_tree_device(lm, repository):
+    for child in lm.getchildren():
+        if child.attrib['name'].endswith(repository):
+            return child
+    return None
 
+# in-place prettyprint formatter
 def indent(elem, level=0):
-    # in-place prettyprint formatter
-    i = "\n" + "  " * level
+    i = "\n" + level*"  "
     if len(elem):
         if not elem.text or not elem.text.strip():
             elem.text = i + "  "
@@ -94,290 +109,229 @@ def indent(elem, level=0):
         if level and (not elem.tail or not elem.tail.strip()):
             elem.tail = i
 
-
-def load_manifest(manifest):
+def get_from_manifest(devicename):
     try:
-        man = ElementTree.parse(manifest).getroot()
-    except (IOError, ElementTree.ParseError):
-        man = ElementTree.Element("manifest")
-    return man
+        lm = ElementTree.parse(".repo/local_manifests/aqua_manifest.xml")
+        lm = lm.getroot()
+    except:
+        lm = ElementTree.Element("manifest")
 
+    for localpath in lm.findall("project"):
+        if re.search("android_device_.*_%s$" % device, localpath.get("name")):
+            return localpath.get("path")
 
-def get_default(manifest=None):
-    if manifest is not None:
-        m = manifest
-    else:
-        m = load_manifest(default_manifest)
-    d = m.findall('default')[0]
-    return d
+    # Devices originally from AOSP are in the main manifest...
+    try:
+        mm = ElementTree.parse(".repo/manifest.xml")
+        mm = mm.getroot()
+    except:
+        mm = ElementTree.Element("manifest")
 
+    for localpath in mm.findall("project"):
+        if re.search("android_device_.*_%s$" % device, localpath.get("name")):
+            return localpath.get("path")
 
-def get_default_revision(manifest=None):
-    r = get_default(manifest=manifest).get('revision')
-    return r.replace('refs/heads/', '').replace('refs/tags/', '')
-
-
-def get_remote(manifest=None, remote_name=None):
-    m = manifest or load_manifest(default_manifest)
-    if not remote_name:
-        remote_name = get_default(manifest=m).get('remote')
-    remotes = m.findall('remote')
-    for remote in remotes:
-        if remote_name == remote.get('name'):
-            return remote
-
-
-def get_revision(manifest=None, p="build"):
-    m = manifest or load_manifest(default_manifest)
-    project = None
-    for proj in m.findall('project'):
-        if proj.get('path').strip('/') == p:
-            project = proj
-            break
-    if project is None:
-        return get_default_revision(manifest=m)
-    revision = project.get('revision')
-    if revision:
-        return revision.replace('refs/heads/', '').replace('refs/tags/', '')
-    remote = get_remote(manifest=m, remote_name=project.get('remote'))
-    revision = remote.get('revision')
-    if not revision:
-        return get_default_revision(manifest=None)
-    return revision.replace('refs/heads/', '').replace('refs/tags/', '')
-
-
-def get_from_manifest(device_name):
-    for man in (custom_local_manifest, default_manifest):
-        man = load_manifest(man)
-        for local_path in man.findall("project"):
-            lp = local_path.get("path").strip('/')
-            if lp.startswith("device/") and lp.endswith("/" + device_name):
-                return lp
     return None
 
+def is_in_manifest(projectname, branch):
+    try:
+        lm = ElementTree.parse(".repo/local_manifests/aqua_manifest.xml")
+        lm = lm.getroot()
+    except:
+        lm = ElementTree.Element("manifest")
 
-def is_in_manifest(project_path):
-    for man in (custom_local_manifest, default_manifest):
-        man = load_manifest(man)
-        for local_path in man.findall("project"):
-            if local_path.get("path") == project_path:
-                return True
-    return False
+    for localpath in lm.findall("project"):
+        if localpath.get("name") == projectname and localpath.get("revision") == branch:
+            return 1
 
+    return None
 
-def add_to_manifest(repos, fallback_branch=None):
-    lm = load_manifest(custom_local_manifest)
+def add_to_manifest_dependencies(repositories):
+    try:
+        lm = ElementTree.parse(".repo/local_manifests/aqua_manifest.xml")
+        lm = lm.getroot()
+    except:
+        lm = ElementTree.Element("manifest")
 
-    for repo in repos:
-        repo_name = repo['repository']
-        repo_target = repo['target_path']
-        if is_in_manifest(repo_target):
-            print('already exists: %s' % repo_target)
+    for repository in repositories:
+        repo_name = repository['repository']
+        repo_target = repository['target_path']
+        existing_project = exists_in_tree(lm, repo_target)
+        if existing_project != None:
+            if existing_project.attrib['name'] != repository['repository']:
+                print 'Updating dependency %s' % (repo_name)
+                existing_project.set('name', repository['repository'])
+            if existing_project.attrib['revision'] == repository['branch']:
+                print 'Aqua-devices/%s already exists' % (repo_name)
+            else:
+                print 'updating branch for %s to %s' % (repo_name, repository['branch'])
+                existing_project.set('revision', repository['branch'])
             continue
 
-        if "/" not in repo_name:
-            repo_name = os.path.join(org_manifest, repo_name)
+        print 'Adding dependency: %s -> %s' % (repo_name, repo_target)
+        project = ElementTree.Element("project", attrib = { "path": repo_target,
+            "remote": "github", "name": repo_name, "revision": aqua_branch })
 
-        print('Adding dependency: %s -> %s' % (repo_name, repo_target))
+        if 'branch' in repository:
+            project.set('revision',repository['branch'])
 
-        project = ElementTree.Element(
-            "project",
-            attrib={"path": repo_target,
-                    "remote": "github",
-                    "name": "%s" % repo_name}
-        )
-
-        if 'branch' in repo:
-            project.set('revision', repo['branch'])
-        elif fallback_branch:
-            print("Using branch %s for %s" %
-                  (fallback_branch, repo_name))
-            project.set('revision', fallback_branch)
-        else:
-            print("Using default branch for %s" % repo_name)
         lm.append(project)
 
-    indent(lm)
-    raw_xml = "\n".join(('<?xml version="1.0" encoding="UTF-8"?>',
-                         ElementTree.tostring(lm).decode()))
+    indent(lm, 0)
+    raw_xml = ElementTree.tostring(lm)
+    raw_xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + raw_xml
 
-    f = open(custom_local_manifest, 'w')
+    f = open('.repo/local_manifests/aqua_manifest.xml', 'w')
     f.write(raw_xml)
     f.close()
 
-_fetch_dep_cache = []
-
-
-def fetch_dependencies(repo_path, fallback_branch=None):
-    global _fetch_dep_cache
-    if repo_path in _fetch_dep_cache:
-        return
-    _fetch_dep_cache.append(repo_path)
-
-    print('Looking for dependencies')
-
-    dep_p = '/'.join((repo_path, custom_dependencies))
-    if os.path.exists(dep_p):
-        with open(dep_p) as dep_f:
-            dependencies = json.load(dep_f)
-    else:
-        dependencies = {}
-        debug('Dependencies file not found, bailing out.')
-
-    fetch_list = []
-    syncable_repos = []
-
-    for dependency in dependencies:
-        if not is_in_manifest(dependency['target_path']):
-            if not dependency.get('branch'):
-                dependency['branch'] = (get_revision() or
-                                        custom_default_revision)
-
-            fetch_list.append(dependency)
-            syncable_repos.append(dependency['target_path'])
-
-    if fetch_list:
-        print('Adding dependencies to manifest')
-        add_to_manifest(fetch_list, fallback_branch)
-
-    if syncable_repos:
-        print('Syncing dependencies')
-        os.system('repo sync --force-sync %s' % ' '.join(syncable_repos))
-
-    for deprepo in syncable_repos:
-        fetch_dependencies(deprepo)
-
-
-def has_branch(branches, revision):
-    return revision in (branch['name'] for branch in branches)
-
-
-def detect_revision(repo):
-    """
-    returns None if using the default revision, else return
-    the branch name if using a different revision
-    """
-    print("Checking branch info")
-    githubreq = urllib.request.Request(
-        repo['branches_url'].replace('{/branch}', ''))
-    add_auth(githubreq)
-    result = json.loads(urllib.request.urlopen(githubreq).read().decode())
-
-    calc_revision = get_revision()
-    default_revision = get_default_revision()
-    print("Calculated revision: %s" % calc_revision)
-    print("Default revision: %s" % default_revision)
-
-
-    if calc_revision != default_revision and has_branch(result, calc_revision):
-        return calc_revision
-    if has_branch(result, default_revision):
-        return None
-
-    # Try tags, too, since that's what releases use
-    githubreq = urllib.request.Request(
-        repo['tags_url'].replace('{/tag}', ''))
-    add_auth(githubreq)
-    result.extend(json.loads(
-        urllib.request.urlopen(githubreq).read().decode()))
-
-    if calc_revision != default_revision and has_branch(result, calc_revision):
-        return calc_revision
-    if has_branch(result, default_revision):
-        return None
-
-    fallbacks = os.getenv('ROOMSERVICE_BRANCHES', '').split()
-    for fallback in fallbacks:
-        if has_branch(result, fallback):
-            print("Using fallback branch: %s" % fallback)
-            return fallback
-
-    if has_branch(result, custom_default_revision):
-        print("Falling back to custom revision: %s"
-              % custom_default_revision)
-        return custom_default_revision
-
-    print("Default revision %s not found in %s. Bailing." %
-          (default_revision, repo['name']))
-    print("Branches found:")
-    for branch in result:
-        print(branch['name'])
-    print("Use the ROOMSERVICE_BRANCHES environment variable to "
-          "specify a list of fallback branches.")
-    sys.exit()
-
-
-def main():
-    global DEBUG
+def add_to_manifest(repositories):
     try:
-        depsonly = bool(sys.argv[2] in ['true', 1])
-    except IndexError:
-        depsonly = False
-
-    if os.getenv('ROOMSERVICE_DEBUG'):
-        DEBUG = True
-
-    product = sys.argv[1]
-    device = product[product.find("_") + 1:] or product
-
-    if depsonly:
-        repo_path = get_from_manifest(device)
-        if repo_path:
-            fetch_dependencies(repo_path)
-        else:
-            print("Trying dependencies-only mode on a "
-                  "non-existing device tree?")
-        sys.exit()
-
-    print("Device {0} not found. Attempting to retrieve device repository from "
-          "{1} Github (http://github.com/{1}).".format(device, org_display))
-
-    githubreq = urllib.request.Request(
-        "https://api.github.com/search/repositories?"
-        "q={0}+user:{1}+in:name+fork:true".format(device, org_display))
-    add_auth(githubreq)
-
-    repositories = []
-
-    try:
-        result = json.loads(urllib.request.urlopen(githubreq).read().decode())
-    except urllib.error.URLError:
-        print("Failed to search GitHub")
-        sys.exit()
-    except ValueError:
-        print("Failed to parse return data from GitHub")
-        sys.exit()
-    for res in result.get('items', []):
-        repositories.append(res)
+        lm = ElementTree.parse(".repo/local_manifests/aqua_manifest.xml")
+        lm = lm.getroot()
+    except:
+        lm = ElementTree.Element("manifest")
 
     for repository in repositories:
-        repo_name = repository['name']
-
-        if not (repo_name.startswith("device_") and
-                repo_name.endswith("_" + device)):
+        repo_name = repository['repository']
+        repo_target = repository['target_path']
+        existing_project = exists_in_tree_device(lm, repo_name)
+        if existing_project != None:
+            if existing_project.attrib['revision'] == repository['branch']:
+                print 'Aqua-devices/%s already exists' % (repo_name)
+            else:
+                print 'updating branch for Aqua-devices/%s to %s' % (repo_name, repository['branch'])
+                existing_project.set('revision', repository['branch'])
             continue
-        print("Found repository: %s" % repository['name'])
 
-        fallback_branch = detect_revision(repository)
-        manufacturer = repo_name[7:-(len(device)+1)]
-        repo_path = "device/%s/%s" % (manufacturer, device)
-        adding = [{'repository': repo_name, 'target_path': repo_path}]
+        print 'Adding dependency: Aqua-devices/%s -> %s' % (repo_name, repo_target)
+        project = ElementTree.Element("project", attrib = { "path": repo_target,
+            "remote": "github", "name": "Aqua-devices/%s" % repo_name, "revision": aqua_branch })
 
-        if not is_in_manifest(repo_path):
-            add_to_manifest(adding, fallback_branch)
+        if 'branch' in repository:
+            project.set('revision', repository['branch'])
 
-            print("Syncing repository to retrieve project.")
-            os.system('repo sync --force-sync %s' % repo_path)
-            print("Repository synced!")
+        lm.append(project)
 
-        fetch_dependencies(repo_path, fallback_branch)
-        print("Done")
-        sys.exit()
+    indent(lm, 0)
+    raw_xml = ElementTree.tostring(lm)
+    raw_xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + raw_xml
 
-    print("Repository for %s not found in the %s Github repository list."
-          % (device, org_display))
-    print("If this is in error, you may need to manually add it to your "
-          "%s" % custom_local_manifest)
+    f = open('.repo/local_manifests/aqua_manifest.xml', 'w')
+    f.write(raw_xml)
+    f.close()
 
-if __name__ == "__main__":
-    main()
+def git(*args):
+    return subprocess.check_call(['git'] + list(args))
+
+def add_gitlab_to_manifest(repositories):
+    try:
+        lm = ElementTree.parse(".repo/local_manifests/aqua_manifest.xml")
+        lm = lm.getroot()
+    except:
+        lm = ElementTree.Element("manifest")
+
+    for repository in repositories:
+        repo_name = repository['repository']
+        repo_target = repository['target_path']
+        existing_project = exists_in_tree_device(lm, repo_name)
+        if existing_project != None:
+            if existing_project.attrib['revision'] == repository['branch']:
+                print 'Nothing to see here'
+            else:
+                existing_project.set('revision', repository['branch'])
+            continue
+
+        project = ElementTree.Element("project", attrib = { "path": repo_target,
+            "remote": "gitlab", "name": repo_name, "revision": aqua_branch })
+
+        if 'branch' in repository:
+            project.set('revision', repository['branch'])
+
+        lm.append(project)
+
+    indent(lm, 0)
+    raw_xml = ElementTree.tostring(lm)
+    raw_xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + raw_xml
+
+    f = open('.repo/local_manifests/aqua_manifest.xml', 'w')
+    f.write(raw_xml)
+    f.close()
+
+def fetch_pixel_gapps(repo_path):
+    gapps_path = repo_path + '/aquarios.mk'
+    with open(gapps_path, 'r') as f:
+        for line in f.readlines():
+            if 'pixelgapps' in line:
+                print 'Fetching project ' + gapps_git.replace("https://gitlab.com/", "")
+                git("clone", gapps_git, "-b", gapps_branch, gapps_location)
+                add_gitlab_to_manifest([{'repository':gapps_git.replace("https://gitlab.com/", ""),'target_path':gapps_location,'branch':gapps_branch}])
+
+def fetch_vendor_images(repo_path):
+    images_path = repo_path + '/aquarios.mk'
+    with open(images_path, 'r') as f:
+        for line in f.readlines():
+            if 'BOARD_PREBUILT_VENDORIMAGE' in line:
+                print 'Fetching project ' + images_git.replace("https://gitlab.com/", "")
+                git("clone", images_git, "-b", images_branch, images_location)
+                add_gitlab_to_manifest([{'repository':images_git.replace("https://gitlab.com/", ""),'target_path':images_location,'branch':images_branch}])
+
+def fetch_dependencies(repo_path):
+    print 'Looking for dependencies'
+    dependencies_path = repo_path + '/aqua.dependencies'
+    syncable_repos = []
+
+    if os.path.exists(dependencies_path):
+        dependencies_file = open(dependencies_path, 'r')
+        dependencies = json.loads(dependencies_file.read())
+        fetch_list = []
+
+        for dependency in dependencies:
+            if not is_in_manifest("%s" % dependency['repository'], "%s" % dependency['branch']):
+                fetch_list.append(dependency)
+                syncable_repos.append(dependency['target_path'])
+
+        dependencies_file.close()
+
+        if len(fetch_list) > 0:
+            print 'Adding dependencies to manifest'
+            add_to_manifest_dependencies(fetch_list)
+    else:
+        print 'Dependencies file not found, bailing out.'
+
+    if len(syncable_repos) > 0:
+        print 'Syncing dependencies'
+        if not os.path.exists(repo_check):
+            fetch_pixel_gapps(repo_path)
+            fetch_vendor_images(repo_path)
+        os.system('repo sync %s' % ' '.join(syncable_repos))
+
+if depsonly:
+    repo_path = get_from_manifest(device)
+    if repo_path:
+        fetch_dependencies(repo_path)
+    else:
+        print "Trying dependencies-only mode on a non-existing device tree?"
+
+    sys.exit()
+
+else:
+    for repository in repositories:
+        repo_name = repository['name']
+        if repo_name.startswith("device_") and repo_name.endswith("_" + device):
+            print "Found repository: %s" % repository['name']
+            manufacturer = repo_name.replace("device_", "").replace("_" + device, "")
+
+            repo_path = "device/%s/%s" % (manufacturer, device)
+
+            add_to_manifest([{'repository':repo_name,'target_path':repo_path,'branch':aqua_branch}])
+
+            print "Syncing repository to retrieve project."
+            os.system('repo sync %s' % repo_path)
+            print "Repository synced!"
+
+            fetch_dependencies(repo_path)
+            print "Done"
+            sys.exit()
+
+print "Repository for %s not found in the AquariOS Devices Github repository list. If this is in error, you may need to manually add it to .repo/local_manifests/aqua_manifest.xml" % device
